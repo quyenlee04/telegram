@@ -1,0 +1,13 @@
+INDEX VERSION 1.134+D:\testminitele\.metadata\.plugins\org.eclipse.jdt.core
+3926286502.index
+3271193799.index
+1865797976.index
+560372173.index
+1124625355.index
+3144623442.index
+3413725848.index
+3061652912.index
+895374125.index
+2149597459.index
+1828978674.index
+4189057839.index

@@ -1,0 +1,146 @@
+package server;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
+
+import javafx.collections.ObservableList;
+
+class ClientHandler extends Thread {
+    
+    private BufferedReader in;
+    private PrintWriter out;
+    private UserDao userDao = new UserDao();
+    private boolean isLoggedIn;
+
+    private String username;
+
+    private String status;
+
+    public ClientHandler(Socket socket) throws SQLException, ClassNotFoundException {
+        try {
+            // Tạo một BufferedReader để đọc dữ liệu từ client
+            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            // Tạo một PrintWriter để ghi dữ liệu ra client
+            this.out = new PrintWriter(socket.getOutputStream(), true);
+        } catch (IOException e) {
+        }
+    }
+    
+    @Override
+    public void run() {
+        try {
+            // Xử lý yêu cầu đăng nhập và đăng ký
+            while (!isLoggedIn) {
+                // Đọc dữ liệu từ người dùng
+                String input = this.in.readLine();
+                if (input == null) {
+                    return;
+                }
+                // Dữ liệu đầu vào sẽ có dạng action:username:password
+                // action là yêu cầu mà người dùng muốn
+                String[] parts = input.split(":");
+                String action = parts[0];
+                String username = (parts.length > 1) ? parts[1] : null;
+                String password = (parts.length > 2) ? parts[2] : null;
+                // Nếu hành động là đăng nhập
+                if (action.startsWith("LOGIN")) {
+                    if (username != null && password != null && userDao.authenticateUser (username, password)) {
+                        User user = userDao.getUser ByUsername(username);
+                        this.username = username;
+                        if (user.getStatus().equals("Busy")) {
+                            // Cập nhật trạng thái thành Available khi người dùng đăng nhập
+                            userDao.updateUser Status(username, "Available");
+                            user = userDao.getUser ByUsername(username);
+                            this.status = "Available";
+                        } else {
+                            this.status = user.getStatus();
+                        }
+                        this.out.println("LOGIN_SUCCESS:" + user.getUsername() + ":" + user.getStatus());
+                        for (PrintWriter writer : Server.printWriters.values()) {
+                            writer.println(this.username + " hiện đang " + this.status);
+                        }
+                        Server.printWriters.put(this.username, this.out);
+                        isLoggedIn = true;
+                    } else {
+                        this.out.println("LOGIN_ERROR");
+                    }
+                    updateOnlineUsers();
+                } else if (action.equals("SIGNUP")) {
+                    if (username != null && password != null && !userDao.usernameExists(username)) {
+                        userDao.createUser (username, password);
+                        User user = userDao.getUser ByUsername(username);
+                        this.username = username;
+                        this.status = user.getStatus();
+            
+                        this.out.println("SIGNUP_SUCCESS");
+                        isLoggedIn = true;
+                    } else {
+                        this.out.println("SIGNUP_ERROR");
+                    }
+                }
+            }
+            
+            // Xử lý tin nhắn
+            while (true) {
+                String message = this.in.readLine();
+                if (message == null) {
+                    return;
+                }
+                // Xử lý tin nhắn thay đổi trạng thái
+                if(message.startsWith("STATUS_CHANGE:")) {
+                    String[] parts = message.split(":");
+                    this.status = parts[2];
+                    // Cập nhật trạng thái trong cơ sở dữ liệu
+                    userDao.updateUser Status(this.username, this.status);
+                    // Gửi trạng thái mới đến tất cả client
+                    for (PrintWriter writer : Server.printWriters.values()) {
+                        writer.println(this.username + " hiện đang " + this.status);
+                    }
+                } else if (message.startsWith("MESSAGE:")) {
+                    String[] parts = message.split(":");
+                    String recipient = parts[1];
+                    String msgContent = parts[2];
+
+                    if ("ALL".equals(recipient)) {
+                        // Gửi tin nhắn đến tất cả người dùng
+                        for (PrintWriter writer : Server.printWriters.values()) {
+                            writer.println(this.username + ": " + msgContent);
+                        }
+                    } else {
+                        // Gửi tin nhắn đến người nhận cụ thể
+                        PrintWriter recipientWriter = Server.printWriters.get(recipient);
+                        if (recipientWriter != null) {
+                            recipientWriter.println(this.username + ": " + msgContent); // Gửi tin nhắn đến người nhận
+                        }
+                    }
+                }
+            }
+            
+        } catch (IOException | SQLException e) {
+            System.out.println(e);
+        }
+    }
+    
+    
+private void updateOnlineUsers() throws SQLException {
+        // Lấy danh sách người dùng trực tuyến từ cơ sở dữ liệu
+        ObservableList<String> availableUsers = userDao.getAvailableUsers();
+        for (Map.Entry<String, PrintWriter> entry : Server.printWriters.entrySet()) {
+            PrintWriter writer = entry.getValue();
+            writer.println("UPDATE_ONLINE_USERS:" + String.join(",", availableUsers));
+        }
+    }
+    
+    public void handleLogout() throws SQLException {
+        if (username != null) {
+            Server.printWriters.remove(username); // Xóa khỏi danh sách
+            updateOnlineUsers(); // Cập nhật cho những người khác về sự thay đổi
+        }
+    }
+}
